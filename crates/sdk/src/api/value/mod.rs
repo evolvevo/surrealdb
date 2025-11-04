@@ -414,12 +414,14 @@ impl Action {
 /// Live queries return a stream of notifications. The notification contains an `action` that triggered the change in the database record and `data` itself.
 /// For deletions the data is the record before it was deleted. For everything else, it's the newly created record or updated record depending on whether
 /// the action is create or update.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[non_exhaustive]
 pub struct Notification<R> {
 	pub query_id: Uuid,
 	pub action: Action,
 	pub data: R,
+	/// The record ID of the document that triggered this notification
+	pub record: Value,
 }
 
 impl Notification<CoreValue> {
@@ -431,7 +433,20 @@ impl Notification<CoreValue> {
 		Ok(Notification {
 			query_id: self.query_id,
 			action: self.action,
+			record: self.record,  // self.record is already Value type after being received
 			data,
 		})
+	}
+}
+
+impl<R> Notification<R> {
+	/// Extract the record ID as a Thing if available
+	///
+	/// Returns None if the record is not a Thing value.
+	pub fn record_id(&self) -> Option<&CoreThing> {
+		match &self.record.0 {
+			CoreValue::Thing(thing) => Some(thing),
+			_ => None,
+		}
 	}
 }

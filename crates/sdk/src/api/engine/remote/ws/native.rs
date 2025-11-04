@@ -18,7 +18,7 @@ use crate::api::Surreal;
 use crate::engine::remote::Data;
 use crate::engine::IntervalStream;
 use crate::opt::WaitFor;
-use crate::{Action, Notification};
+use crate::{Action, Notification, Value};
 use async_channel::Receiver;
 use futures::stream::{SplitSink, SplitStream};
 use futures::SinkExt;
@@ -338,6 +338,7 @@ async fn router_handle_response(response: Message, state: &mut RouterState) -> H
 										query_id: *notification.id,
 										action: Action::from_core(notification.action),
 										data: notification.result,
+										record: Value::from_inner(notification.record),
 									};
 									if sender.send(Ok(notification)).await.is_err() {
 										state.live_queries.remove(&live_query_id);
