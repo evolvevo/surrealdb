@@ -8,7 +8,7 @@ use crate::{
 	},
 	engine::tasks,
 	opt::{auth::Root, WaitFor},
-	value::Notification,
+	value::{Notification, Value},
 	Action,
 };
 use async_channel::{Receiver, Sender};
@@ -177,7 +177,8 @@ pub(crate) async fn run_router(
 				let notification = Notification{
 					query_id: *notification.id,
 					action: Action::from_core(notification.action),
-					data: notification.result
+					data: notification.result,
+					record: Value::from_inner(notification.record),
 				};
 
 				tokio::spawn(async move {
