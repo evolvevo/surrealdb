@@ -14,7 +14,7 @@ use crate::kvs::Datastore;
 use crate::opt::auth::Root;
 use crate::opt::WaitFor;
 use crate::options::EngineOptions;
-use crate::{Action, Notification};
+use crate::{Action, Notification, Value};
 use async_channel::{Receiver, Sender};
 use futures::stream::poll_fn;
 use futures::FutureExt;
@@ -177,6 +177,8 @@ pub(crate) async fn run_router(
 						query_id: notification.id.0,
 						action: Action::from_core(notification.action),
 						data: notification.result,
+						record: Value::from_inner(notification.record),
+						source_connection: notification.source_connection,
 					};
 
 					if sender.send(Ok(notification)).await.is_err() {

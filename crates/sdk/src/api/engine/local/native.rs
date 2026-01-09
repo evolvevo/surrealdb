@@ -179,6 +179,7 @@ pub(crate) async fn run_router(
 					action: Action::from_core(notification.action),
 					data: notification.result,
 					record: Value::from_inner(notification.record),
+					source_connection: notification.source_connection,
 				};
 
 				tokio::spawn(async move {

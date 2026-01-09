@@ -422,6 +422,8 @@ pub struct Notification<R> {
 	pub data: R,
 	/// The record ID of the document that triggered this notification
 	pub record: Value,
+	/// The connection ID that caused this change (if available)
+	pub source_connection: Option<String>,
 }
 
 impl Notification<CoreValue> {
@@ -433,7 +435,8 @@ impl Notification<CoreValue> {
 		Ok(Notification {
 			query_id: self.query_id,
 			action: self.action,
-			record: self.record,  // self.record is already Value type after being received
+			record: self.record,
+			source_connection: self.source_connection,
 			data,
 		})
 	}

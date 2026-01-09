@@ -7,6 +7,7 @@ use crate::doc::CursorDoc;
 use crate::doc::Document;
 use crate::err::Error;
 use crate::sql::paths::AC;
+use crate::sql::paths::ID;
 use crate::sql::paths::META;
 use crate::sql::paths::RD;
 use crate::sql::paths::TK;
@@ -200,14 +201,22 @@ impl Document {
 				}
 			}
 
+			// Extract the source connection ID from the context that triggered this change
+			let source_connection = ctx
+				.value("session")
+				.map(|s| s.pick(&*ID))
+				.filter(|v| !v.is_none_or_null())
+				.map(|v| v.as_string());
+
 			// Send the notification
 			let res = chn
-				.send(Notification {
-					id: lv.id,
+				.send(Notification::new(
+					lv.id,
 					action,
-					record: Value::Thing(rid.as_ref().clone()),
+					Value::Thing(rid.as_ref().clone()),
 					result,
-				})
+					source_connection,
+				))
 				.await;
 
 			if res.is_err() {

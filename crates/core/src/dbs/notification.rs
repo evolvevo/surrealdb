@@ -37,6 +37,9 @@ pub struct Notification {
 	pub record: Value,
 	/// The resulting notification content, usually the altered record content
 	pub result: Value,
+	/// The connection ID that caused this change (if available)
+	#[serde(default)]
+	pub source_connection: Option<String>,
 }
 
 impl Display for Notification {
@@ -54,12 +57,19 @@ impl Display for Notification {
 
 impl Notification {
 	/// Construct a new notification
-	pub const fn new(id: Uuid, action: Action, record: Value, result: Value) -> Self {
+	pub const fn new(
+		id: Uuid,
+		action: Action,
+		record: Value,
+		result: Value,
+		source_connection: Option<String>,
+	) -> Self {
 		Self {
 			id,
 			action,
 			record,
 			result,
+			source_connection,
 		}
 	}
 }
