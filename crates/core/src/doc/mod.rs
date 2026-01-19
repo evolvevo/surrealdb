@@ -5,6 +5,7 @@
 //! - `initial`: value before the transaction
 //! - `id`: traditionally an integer but can be an object or collection such as an array
 pub(crate) use self::document::*;
+pub(crate) use self::lives::process_cdc_event;
 
 mod document; // The entry point for a document to be processed
 
