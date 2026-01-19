@@ -1,14 +1,15 @@
 #![cfg(feature = "kv-tikv")]
 
+pub mod cdc;
 mod cnf;
 
 use crate::err::Error;
 use crate::key::debug::Sprintable;
-use crate::kvs::savepoint::{SaveOperation, SavePointImpl, SavePoints, SavePrepare};
 use crate::kvs::Check;
 use crate::kvs::Key;
 use crate::kvs::KeyEncode;
 use crate::kvs::Val;
+use crate::kvs::savepoint::{SaveOperation, SavePointImpl, SavePoints, SavePrepare};
 use crate::vs::VersionStamp;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -23,6 +24,8 @@ const TARGET: &str = "surrealdb::core::kvs::tikv";
 
 pub struct Datastore {
 	db: Pin<Arc<TransactionClient>>,
+	/// The PD endpoint for CDC subscription
+	pd_endpoint: String,
 }
 
 pub struct Transaction {
@@ -84,22 +87,25 @@ impl Datastore {
 		};
 		// Set the default request timeout
 		let config = config.with_timeout(Duration::from_secs(*cnf::TIKV_REQUEST_TIMEOUT));
-		// Set the max decoding message size
-		let config =
-			config.with_grpc_max_decoding_message_size(*cnf::TIKV_GRPC_MAX_DECODING_MESSAGE_SIZE);
 		// Create the client with the config
 		let client = TransactionClient::new_with_config(vec![path], config);
 		// Check for errors with the client
 		match client.await {
 			Ok(db) => Ok(Datastore {
 				db: Arc::pin(db),
+				pd_endpoint: path.to_string(),
 			}),
 			Err(e) => Err(Error::Ds(e.to_string())),
 		}
 	}
+
+	/// Get the PD endpoint for CDC subscription
+	pub(crate) fn pd_endpoint(&self) -> &str {
+		&self.pd_endpoint
+	}
+
 	/// Shutdown the database
 	pub(crate) async fn shutdown(&self) -> Result<(), Error> {
-		// Nothing to do here
 		Ok(())
 	}
 	/// Start a new transaction
@@ -565,7 +571,7 @@ impl super::api::Transaction for Transaction {
 		// Calculate the version key
 		let key = key.encode_owned()?;
 		// Get the transaction version
-		let ver = self.inner.current_timestamp().await?.version();
+		let ver = self.inner.start_timestamp().version();
 		// Calculate the previous version value
 		if let Some(prev) = self.get(key.as_slice(), None).await? {
 			let prev = VersionStamp::from_slice(prev.as_slice())?.try_into_u64()?;

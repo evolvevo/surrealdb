@@ -21,5 +21,7 @@ pub(super) static TIKV_ONE_PHASE_COMMIT: LazyLock<bool> =
 	lazy_env_parse!("SURREAL_TIKV_ONE_PHASE_COMMIT", bool, true);
 
 /// Limits the maximum size of a decoded message - default value to 4MB
+/// Note: Currently unused as with_grpc_max_decoding_message_size is not in tikv-client fork yet
+#[allow(dead_code)]
 pub(super) static TIKV_GRPC_MAX_DECODING_MESSAGE_SIZE: LazyLock<usize> =
 	lazy_env_parse!("SURREAL_TIKV_GRPC_MAX_DECODING_MESSAGE_SIZE", usize, 4 * 1024 * 1024);

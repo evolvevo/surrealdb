@@ -1,4 +1,6 @@
 use super::export;
+#[cfg(feature = "kv-tikv")]
+use super::tikv::cdc::{CdcConsumer, CdcHandle};
 use super::tr::Transactor;
 use super::tx::Transaction;
 use super::version::Version;
@@ -27,7 +29,7 @@ use crate::kvs::index::IndexBuilder;
 use crate::kvs::slowlog::SlowLog;
 use crate::kvs::tasklease::{LeaseHandler, TaskLeaseType};
 use crate::kvs::{LockType, LockType::*, TransactionType, TransactionType::*};
-use crate::sql::{statements::DefineUserStatement, Base, Index, Query, Value};
+use crate::sql::{Base, Index, Query, Value, statements::DefineUserStatement};
 use crate::syn;
 use crate::syn::parser::{ParserSettings, StatementStream};
 use crate::{cf, cnf};
@@ -40,7 +42,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -93,6 +95,9 @@ pub struct Datastore {
 	#[cfg(storage)]
 	// The temporary directory
 	temporary_directory: Option<Arc<PathBuf>>,
+	#[cfg(feature = "kv-tikv")]
+	// The CDC consumer handle for TiKV LIVE SELECT support
+	cdc_handle: Option<CdcHandle>,
 }
 
 #[derive(Clone)]
@@ -447,6 +452,8 @@ impl Datastore {
 				#[cfg(storage)]
 				temporary_directory: None,
 				cache: Arc::new(DatastoreCache::new()),
+				#[cfg(feature = "kv-tikv")]
+				cdc_handle: None,
 			}
 		})
 	}
@@ -492,6 +499,8 @@ impl Datastore {
 			temporary_directory: self.temporary_directory,
 			transaction_factory: self.transaction_factory,
 			cache: Arc::new(DatastoreCache::new()),
+			#[cfg(feature = "kv-tikv")]
+			cdc_handle: self.cdc_handle,
 		}
 	}
 
@@ -510,6 +519,17 @@ impl Datastore {
 	/// Specify whether this datastore should enable live query notifications
 	pub fn with_notifications(mut self) -> Self {
 		self.notification_channel = Some(async_channel::bounded(LQ_CHANNEL_SIZE));
+
+		// Start CDC consumer for TiKV to enable distributed LIVE SELECT
+		#[cfg(feature = "kv-tikv")]
+		if let DatastoreFlavor::TiKV(ref tikv_ds) = self.transaction_factory.flavor.as_ref() {
+			let pd_endpoint = tikv_ds.pd_endpoint().to_string();
+			let sender = self.notification_channel.as_ref().unwrap().0.clone();
+			let tf = self.transaction_factory.clone();
+			let consumer = CdcConsumer::new(pd_endpoint, sender, tf);
+			self.cdc_handle = Some(consumer.spawn());
+		}
+
 		self
 	}
 
@@ -1028,48 +1048,50 @@ impl Datastore {
 		let mut complete = false;
 		let mut filling = true;
 
-		let stream = futures::stream::poll_fn(move |cx| loop {
-			// fill the buffer to at least parse_size when filling is required.
-			while filling {
-				let bytes = ready!(bytes_stream.as_mut().poll_next(cx));
-				let bytes = match bytes {
-					Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-					Some(Ok(x)) => x,
-					None => {
-						complete = true;
-						filling = false;
-						break;
+		let stream = futures::stream::poll_fn(move |cx| {
+			loop {
+				// fill the buffer to at least parse_size when filling is required.
+				while filling {
+					let bytes = ready!(bytes_stream.as_mut().poll_next(cx));
+					let bytes = match bytes {
+						Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+						Some(Ok(x)) => x,
+						None => {
+							complete = true;
+							filling = false;
+							break;
+						}
+					};
+
+					buffer.extend_from_slice(&bytes);
+					filling = buffer.len() < parse_size
+				}
+
+				// if we finished streaming we can parse with complete so that the parser can be sure
+				// of it's results.
+				if complete {
+					return match statements_stream.parse_complete(&mut buffer) {
+						Err(e) => Poll::Ready(Some(Err(Error::InvalidQuery(e)))),
+						Ok(None) => Poll::Ready(None),
+						Ok(Some(x)) => Poll::Ready(Some(Ok(x))),
+					};
+				}
+
+				// otherwise try to parse a single statement.
+				match statements_stream.parse_partial(&mut buffer) {
+					Err(e) => return Poll::Ready(Some(Err(Error::InvalidQuery(e)))),
+					Ok(Some(x)) => return Poll::Ready(Some(Ok(x))),
+					Ok(None) => {
+						// Couldn't parse a statement for sure.
+						if buffer.len() >= parse_size && parse_size < u32::MAX as usize {
+							// the buffer already contained more or equal to parse_size bytes
+							// this means we are trying to parse a statement of more then buffer size.
+							// so we need to increase the buffer size.
+							parse_size = (parse_size + 1).next_power_of_two();
+						}
+						// start filling the buffer again.
+						filling = true;
 					}
-				};
-
-				buffer.extend_from_slice(&bytes);
-				filling = buffer.len() < parse_size
-			}
-
-			// if we finished streaming we can parse with complete so that the parser can be sure
-			// of it's results.
-			if complete {
-				return match statements_stream.parse_complete(&mut buffer) {
-					Err(e) => Poll::Ready(Some(Err(Error::InvalidQuery(e)))),
-					Ok(None) => Poll::Ready(None),
-					Ok(Some(x)) => Poll::Ready(Some(Ok(x))),
-				};
-			}
-
-			// otherwise try to parse a single statement.
-			match statements_stream.parse_partial(&mut buffer) {
-				Err(e) => return Poll::Ready(Some(Err(Error::InvalidQuery(e)))),
-				Ok(Some(x)) => return Poll::Ready(Some(Ok(x))),
-				Ok(None) => {
-					// Couldn't parse a statement for sure.
-					if buffer.len() >= parse_size && parse_size < u32::MAX as usize {
-						// the buffer already contained more or equal to parse_size bytes
-						// this means we are trying to parse a statement of more then buffer size.
-						// so we need to increase the buffer size.
-						parse_size = (parse_size + 1).next_power_of_two();
-					}
-					// start filling the buffer again.
-					filling = true;
 				}
 			}
 		});
