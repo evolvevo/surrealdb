@@ -24,7 +24,7 @@ COPY docker docker
 RUN . /opt/rh/gcc-toolset-13/enable && \
     RUSTFLAGS="-D warnings --cfg tokio_unstable" \
     cargo build --release --locked \
-        --no-default-features --features "storage-mem,storage-rocksdb,storage-surrealkv,scripting,http,jwks"
+        --no-default-features --features "storage-mem,storage-rocksdb,storage-surrealkv,storage-tikv,scripting,http,jwks"
 
 RUN cp target/release/surreal /surreal-bin
 
