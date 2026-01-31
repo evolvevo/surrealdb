@@ -1,0 +1,77 @@
+###
+# STAGE: builder
+# Build the SurrealDB binary from source
+###
+
+FROM docker.io/rockylinux/rockylinux:9 AS builder
+
+RUN dnf install -y gcc-toolset-13 git cmake llvm-toolset patch zlib-devel python3.11
+
+ARG RUST_VERSION=1.88.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup.sh \
+    && bash /tmp/rustup.sh -y --default-toolchain ${RUST_VERSION}
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /surrealdb
+
+# Copy manifests first for better layer caching
+COPY Cargo.toml Cargo.lock Makefile.toml ./
+COPY crates crates
+COPY src src
+COPY docker docker
+
+# Build release binary
+RUN . /opt/rh/gcc-toolset-13/enable && \
+    RUSTFLAGS="-D warnings --cfg tokio_unstable" \
+    cargo build --release --locked \
+        --no-default-features --features "storage-mem,storage-rocksdb,storage-surrealkv,scripting,http,jwks"
+
+RUN cp target/release/surreal /surreal-bin
+
+###
+# STAGE: tzdata
+###
+
+FROM cgr.dev/chainguard/wolfi-base AS tzdata
+
+RUN apk add --no-cache tzdata
+
+###
+# STAGE: setup
+# Use the -dev variant (has shell) to create dirs and set permissions
+###
+
+FROM cgr.dev/chainguard/glibc-dynamic:latest-dev AS setup
+
+USER root
+
+COPY --from=builder /surreal-bin /surreal
+COPY --from=tzdata /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=tzdata /usr/share/zoneinfo/UTC /etc/localtime
+
+RUN chmod +x /surreal \
+    && mkdir /data /logs \
+    && chown -R nonroot:nonroot /data \
+    && chmod -R 777 /data \
+    && chown -R nonroot:nonroot /logs \
+    && chmod -R 777 /logs
+
+###
+# Final image
+###
+
+FROM cgr.dev/chainguard/glibc-dynamic:latest
+
+COPY --from=setup /surreal /surreal
+COPY --from=setup /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=setup /etc/localtime /etc/localtime
+COPY --from=setup /data /data
+COPY --from=setup /logs /logs
+
+USER nonroot:nonroot
+
+VOLUME /data /logs
+
+ENV SURREAL_BIND="0.0.0.0:8000"
+
+ENTRYPOINT ["/surreal"]
