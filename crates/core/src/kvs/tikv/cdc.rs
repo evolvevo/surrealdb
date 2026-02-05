@@ -170,6 +170,13 @@ impl CdcConsumer {
 			RowOp::Unknown => return Ok(()),
 		};
 
+		// Skip CDC events with no value for Create/Update
+		// (these are internal bookkeeping like reference keys, not actual record data)
+		if matches!(action, Action::Create | Action::Update) && row.value.is_none() {
+			trace!(target: TARGET, "Skipping {:?} with no value for {}.{}.{}:{:?}", action, ns, db, tb, id);
+			return Ok(());
+		}
+
 		trace!(target: TARGET, "Processing {:?} on {}.{}.{}:{:?}", action, ns, db, tb, id);
 
 		// Decode the document values
